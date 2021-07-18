@@ -4,6 +4,11 @@ For help run the command with no arguments:
 
     ./nxpprog.py
 
+### Flashing to your SJ Two Board
+```Shell
+$ python nxpprog.py --binary <path to binary> --device <device port>
+```
+
 ### Help menu
 
 ```
