@@ -1,2 +1,4 @@
-modules/
+venv/
 *.pyc
+dist/
+*.egg-info/

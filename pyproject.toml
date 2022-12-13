@@ -1,0 +1,32 @@
+[project]
+name = "nxpprog"
+version = "1.0.3"
+authors = [
+  { name="libhal organization", email="libembeddedhal@gmail.com" },
+]
+description = "Programmer for NXP Microcontrollers using the NXP ISP protocol"
+readme = "README.md"
+requires-python = ">=3.9"
+classifiers = [
+    'Programming Language :: Python :: 3',
+    'License :: OSI Approved :: MIT License',
+    'Operating System :: MacOS :: MacOS X',
+    'Operating System :: POSIX :: Linux',
+]
+
+dependencies = [
+  'pyserial>=3.4',
+  'click>=7.1.2',
+  'rich==12.6.0',
+]
+
+[project.urls]
+"Homepage" = "https://github.com/libhal/nxpprog"
+"Bug Tracker" = "https://github.com/libhal/nxpprog/issues"
+
+[build-system]
+build-backend = "setuptools.build_meta"
+requires = ["setuptools", "wheel"]
+
+[project.scripts]
+nxpprog = "nxpprog.nxpprog:main"
