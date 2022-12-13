@@ -34,6 +34,8 @@ import time
 import click
 import ihex
 
+from rich.progress import Progress, SpinnerColumn, TimeElapsedColumn, MofNCompleteColumn
+
 import serial
 import serial.serialutil
 import serial.tools.list_ports as port_list
@@ -406,59 +408,12 @@ LPC_CHAR = {'Question': b'?',
             'SynchronizedLeadingZeros': b'\x00\x00Synchronized\r\n',
             'OK': b'OK\r\n'}
 
-# Animation stuff
-ANIMATIONS = {
-    "circles": [0x25D0, 0x25D3, 0x25D1, 0x25D2],
-    "quadrants": [0x259F, 0x2599, 0x259B, 0x259C],
-    "trigrams": [0x2630, 0x2631, 0x2632, 0x2634],
-    "squarefills": [0x25E7, 0x25E9, 0x25E8, 0x25EA],
-    "spaces": [0x2008, 0x2008, 0x2008, 0x2008],
-    "braille":
-    [0x2840, 0x2844, 0x2846, 0x2847, 0x28c7, 0x28e7, 0x28f7, 0x28fF],
-    "dots12": [
-        "⢀⠀", "⡀⠀", "⠄⠀", "⢂⠀", "⡂⠀", "⠅⠀", "⢃⠀", "⡃⠀", "⠍⠀", "⢋⠀", "⡋⠀", "⠍⠁", "⢋⠁",
-        "⡋⠁", "⠍⠉", "⠋⠉", "⠋⠉", "⠉⠙", "⠉⠙", "⠉⠩", "⠈⢙", "⠈⡙", "⢈⠩", "⡀⢙", "⠄⡙", "⢂⠩",
-        "⡂⢘", "⠅⡘", "⢃⠨", "⡃⢐", "⠍⡐", "⢋⠠", "⡋⢀", "⠍⡁", "⢋⠁", "⡋⠁", "⠍⠉", "⠋⠉", "⠋⠉",
-        "⠉⠙", "⠉⠙", "⠉⠩", "⠈⢙", "⠈⡙", "⠈⠩", "⠀⢙", "⠀⡙", "⠀⠩", "⠀⢘", "⠀⡘", "⠀⠨", "⠀⢐",
-        "⠀⡐", "⠀⠠", "⠀⢀", "⠀⡀"
-    ]
-}
-selected_animation = ANIMATIONS["dots12"]
-
 
 def unichar(i):
     try:
         return chr(i)
     except ValueError:
         return struct.pack('i', i).decode('utf-32')
-
-
-spinner_starting_point = 0
-
-
-def progress_bar(bar_length, current_block, total_blocks):
-    global spinner_starting_point
-    bar_len = bar_length
-    filled_len = int(
-        round(bar_len * (current_block + 1) / float(total_blocks)))
-
-    percents = round(100.0 * (current_block + 1) / float(total_blocks), 1)
-
-    bar = "█" * (filled_len - 1)
-    bar = bar + "░" * (bar_len - filled_len)
-
-    suffix = "Block # 0x{:X} of 0x{:X}".format(
-        current_block + 1, int(total_blocks))
-
-    sys.stdout.write(
-        '\r▕%s▏ %s%% %s %s ' %
-        (bar, percents,
-         selected_animation[spinner_starting_point % len(selected_animation)],
-         suffix))
-
-    spinner_starting_point += 1
-
-    sys.stdout.flush()
 
 
 class AutoLPCPortFinder:
@@ -705,6 +660,7 @@ class UdpDevice(object):
 
 
 class nxpprog:
+
     def __init__(self, cpu, device, baud, osc_freq, xonxoff=False, control=False, address=None, verify=False):
         self.echo_on = True
         self.verify = verify
@@ -904,6 +860,7 @@ class nxpprog:
                 c_line_size = self.uu_line_size
             block = data[i:i+c_line_size]
             bstr = binascii.b2a_uu(block)
+            self.progress.update(self.progress_bar_task, advance=len(block))
             self.dev_write(bstr)
 
         retry = 3
@@ -990,9 +947,8 @@ class nxpprog:
 
     def write_ram_data(self, addr, data, total_length):
         image_len = len(data)
-        for i in range(0, image_len, self.uu_block_size):
-            progress_bar(30, self.current_address, self.total_length)
 
+        for i in range(0, image_len, self.uu_block_size):
             a_block_size = image_len - i
             if a_block_size > self.uu_block_size:
                 a_block_size = self.uu_block_size
@@ -1158,6 +1114,7 @@ class nxpprog:
 
         image_len = len(image)
         self.total_length = image_len
+
         # pad to a multiple of ram_block size with 0xff
         pad_count_rem = image_len % ram_block
         if pad_count_rem != 0:
@@ -1176,50 +1133,58 @@ class nxpprog:
         sys.stdout.write('\r\n')
         sys.stdout.flush()
 
-        for image_index in range(0, image_len, ram_block):
-            a_ram_block = image_len - image_index
-            if a_ram_block > ram_block:
-                a_ram_block = ram_block
+        with Progress(SpinnerColumn("dots"),
+                      *Progress.get_default_columns(),
+                      TimeElapsedColumn(),
+                      MofNCompleteColumn()) as progress:
+            self.progress_bar_task = progress.add_task(
+                "Uploading...", total=image_len)
+            self.progress = progress
 
-            flash_addr_start = image_index + flash_addr_base
-            flash_addr_end = flash_addr_start + a_ram_block - 1
+            for image_index in range(0, image_len, ram_block):
+                a_ram_block = image_len - image_index
+                if a_ram_block > ram_block:
+                    a_ram_block = ram_block
 
-            logging.debug("Writing %d bytes to 0x%x" %
-                          (a_ram_block, flash_addr_start))
+                flash_addr_start = image_index + flash_addr_base
+                flash_addr_end = flash_addr_start + a_ram_block - 1
 
-            self.current_address = flash_addr_start
+                logging.debug("Writing %d bytes to 0x%x" %
+                              (a_ram_block, flash_addr_start))
 
-            self.write_ram_data(ram_addr,
-                                image[image_index: image_index + a_ram_block], image_len)
+                self.current_address = flash_addr_start
 
-            s_flash_sector = self.find_flash_sector(flash_addr_start)
+                self.write_ram_data(ram_addr,
+                                    image[image_index: image_index + a_ram_block], image_len)
 
-            e_flash_sector = self.find_flash_sector(flash_addr_end)
+                s_flash_sector = self.find_flash_sector(flash_addr_start)
 
-            self.prepare_flash_sectors(s_flash_sector, e_flash_sector)
+                e_flash_sector = self.find_flash_sector(flash_addr_end)
 
-            # copy ram to flash
-            self.isp_command("C %d %d %d" %
-                             (flash_addr_start, ram_addr, a_ram_block))
+                self.prepare_flash_sectors(s_flash_sector, e_flash_sector)
 
-            # optionally compare ram and flash
-            if verify:
-                old_panic = panic
-                panic = log
-                result = self.isp_command("M %d %d %d" %
-                                          (flash_addr_start, ram_addr, a_ram_block))
-                panic = old_panic
-                if result == str(CMD_SUCCESS):
-                    pass
-                elif result == str(COMPARE_ERROR):
-                    self.dev_readline()  # offset
-                    success = False
-                else:
-                    self.errexit("'%s' '%s' error" % (cmd, status))
+                # copy ram to flash
+                self.isp_command("C %d %d %d" %
+                                 (flash_addr_start, ram_addr, a_ram_block))
 
-        progress_bar(30, image_len - 1, image_len)
+                # optionally compare ram and flash
+                if verify:
+                    old_panic = panic
+                    panic = log
+                    result = self.isp_command("M %d %d %d" %
+                                              (flash_addr_start, ram_addr, a_ram_block))
+                    panic = old_panic
+                    if result == str(CMD_SUCCESS):
+                        pass
+                    elif result == str(COMPARE_ERROR):
+                        self.dev_readline()  # offset
+                        success = False
+                    else:
+                        self.errexit("'%s' '%s' error" % (cmd, status))
 
-        sys.stdout.write('\r\n\r\n')
+                image_index += self.uu_block_size
+
+        sys.stdout.write('\r\n')
         sys.stdout.flush()
         return success
 
